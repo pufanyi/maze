@@ -38,7 +38,10 @@ def solve_bfs(
 
 @dataclass
 class BfsStep:
-    """State at one step of bidirectional BFS."""
+    """State at one step of BFS exploration.
+
+    Backward fields are empty for unidirectional BFS.
+    """
     forward_visited: set[tuple[int, int]]
     backward_visited: set[tuple[int, int]]
     forward_frontier: list[tuple[int, int]]
@@ -49,14 +52,76 @@ class BfsStep:
 
 
 @dataclass
-class BidirectionalBfsResult:
+class BfsAnimationResult:
     steps: list[BfsStep]
     path: list[tuple[int, int]]
 
 
+def solve_bfs_with_steps(
+    grid: np.ndarray, start: tuple[int, int], end: tuple[int, int]
+) -> BfsAnimationResult:
+    """Unidirectional BFS. Records each expansion step for animation."""
+    h, w = grid.shape
+    directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+
+    visited: set[tuple[int, int]] = {start}
+    parent: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
+    frontier = deque([start])
+
+    steps: list[BfsStep] = [
+        BfsStep(
+            forward_visited=set(visited),
+            backward_visited=set(),
+            forward_frontier=list(frontier),
+            backward_frontier=[],
+            forward_parent=dict(parent),
+            backward_parent={},
+            meeting_point=None,
+        ),
+    ]
+
+    found = start == end
+    while frontier and not found:
+        next_frontier: deque[tuple[int, int]] = deque()
+        goal: tuple[int, int] | None = None
+
+        while frontier:
+            r, c = frontier.popleft()
+            for dr, dc in directions:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and grid[nr, nc] == 0 and (nr, nc) not in visited:
+                    visited.add((nr, nc))
+                    parent[(nr, nc)] = (r, c)
+                    next_frontier.append((nr, nc))
+                    if goal is None and (nr, nc) == end:
+                        goal = (nr, nc)
+
+        found = goal is not None
+        frontier = next_frontier
+        steps.append(BfsStep(
+            forward_visited=set(visited),
+            backward_visited=set(),
+            forward_frontier=list(frontier),
+            backward_frontier=[],
+            forward_parent=dict(parent),
+            backward_parent={},
+            meeting_point=goal,
+        ))
+
+    path: list[tuple[int, int]] = []
+    if end in parent:
+        node: tuple[int, int] | None = end
+        while node is not None:
+            path.append(node)
+            node = parent.get(node)
+        path.reverse()
+
+    return BfsAnimationResult(steps=steps, path=path)
+
+
 def solve_bidirectional_bfs(
     grid: np.ndarray, start: tuple[int, int], end: tuple[int, int]
-) -> BidirectionalBfsResult:
+) -> BfsAnimationResult:
     """Bidirectional BFS. Records each expansion step for animation."""
     h, w = grid.shape
     directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
@@ -143,4 +208,4 @@ def solve_bidirectional_bfs(
 
         path = fwd_half + bwd_half
 
-    return BidirectionalBfsResult(steps=steps, path=path)
+    return BfsAnimationResult(steps=steps, path=path)

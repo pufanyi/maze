@@ -327,7 +327,7 @@ def render_bfs_frames(
     fps: int,
     duration: float,
 ) -> list[Image.Image]:
-    """Render all frames for the bidirectional BFS exploration video."""
+    """Render all frames for a BFS exploration video."""
     total_frames = int(fps * duration)
     if total_frames < 2:
         total_frames = 2

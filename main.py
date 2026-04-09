@@ -15,7 +15,15 @@ def main():
     parser.add_argument("--duration", type=float, default=3.0, help="Video duration in seconds")
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 1, help="Parallel workers")
     parser.add_argument("--seed", type=int, default=0, help="Global random seed")
+    parser.add_argument(
+        "--search-video-modes",
+        type=str,
+        default="bidirectional",
+        help="Comma-separated search video modes: bidirectional,unidirectional",
+    )
     args = parser.parse_args()
+
+    search_video_modes = [mode.strip() for mode in args.search_video_modes.split(",")]
 
     print(f"Generating {args.count} mazes ({args.rows}x{args.cols}) -> {args.output}")
     generate_dataset(
@@ -28,6 +36,7 @@ def main():
         duration=args.duration,
         workers=args.workers,
         seed=args.seed,
+        search_video_modes=search_video_modes,
     )
     print("Done!")
 
