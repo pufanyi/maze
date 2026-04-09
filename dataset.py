@@ -7,8 +7,19 @@ import numpy as np
 from tqdm import tqdm
 
 from generator import generate_maze
-from renderer import render_bfs_frames, render_solution_image, render_walk_frames
-from solver import solve_bfs, solve_bfs_with_steps, solve_bidirectional_bfs
+from renderer import (
+    render_bfs_frames,
+    render_distance_bfs_frames,
+    render_pruning_frames,
+    render_solution_image,
+    render_walk_frames,
+)
+from solver import (
+    compute_pruning_order,
+    solve_bfs,
+    solve_bfs_with_steps,
+    solve_bidirectional_bfs,
+)
 from video import encode_video
 
 
@@ -179,7 +190,6 @@ def _generate_single(args: dict) -> dict:
     fps: int = args["fps"]
     duration: float = args["duration"]
     output_dir: str = args["output_dir"]
-    search_video_modes: list[str] = args["search_video_modes"]
 
     # Generate maze
     maze = generate_maze(rows, cols, seed)
@@ -189,28 +199,40 @@ def _generate_single(args: dict) -> dict:
 
     name = f"{sample_id:06d}"
 
-    # Render and save walk video
+    # --- Phase 1: Distance-colored BFS ---
+    bfs_result = solve_bfs_with_steps(maze.grid, maze.start, maze.end)
+    dist_bfs_frames = render_distance_bfs_frames(
+        maze.grid, bfs_result.steps, maze.start, maze.end, resolution, fps, duration,
+    )
+    dist_bfs_path = os.path.join(output_dir, "distance_bfs_videos", f"{name}.mp4")
+    encode_video(dist_bfs_frames, dist_bfs_path, fps)
+
+    # --- Phase 2: BFS + Pruning animation ---
+    final_step = bfs_result.steps[-1]
+    pruning_layers = compute_pruning_order(final_step.forward_parent, path)
+    prune_only_frames = render_pruning_frames(
+        maze.grid,
+        final_step.forward_parent,
+        final_step.forward_dist,
+        pruning_layers,
+        path,
+        maze.start,
+        maze.end,
+        resolution,
+        fps,
+        duration,
+    )
+    pruning_path = os.path.join(output_dir, "pruning_videos", f"{name}.mp4")
+    encode_video(dist_bfs_frames + prune_only_frames, pruning_path, fps)
+
+    # --- Phase 3: Ball walk video ---
     walk_frames = render_walk_frames(
         maze.grid, path, maze.start, maze.end, resolution, fps, duration,
     )
     walk_path = os.path.join(output_dir, "walk_videos", f"{name}.mp4")
     encode_video(walk_frames, walk_path, fps)
 
-    search_video_metadata = _render_search_videos(
-        maze.grid,
-        maze.start,
-        maze.end,
-        resolution,
-        fps,
-        duration,
-        output_dir,
-        name,
-        search_video_modes,
-        final_path=path,
-        output_subdir=None,
-    )
-
-    # Render and save solution image
+    # --- Solution image ---
     sol_img = render_solution_image(maze.grid, path, maze.start, maze.end, resolution)
     sol_path = os.path.join(output_dir, "solution_images", f"{name}.png")
     sol_img.convert("RGB").save(sol_path)
@@ -225,14 +247,14 @@ def _generate_single(args: dict) -> dict:
         "path": [list(p) for p in path],
         "path_length": len(path),
         "seed": seed,
+        "distance_bfs_video": f"distance_bfs_videos/{name}.mp4",
+        "pruning_video": f"pruning_videos/{name}.mp4",
         "walk_video": f"walk_videos/{name}.mp4",
         "solution_image": f"solution_images/{name}.png",
         "fps": fps,
         "duration": duration,
         "resolution": resolution,
-        "search_video_modes": search_video_modes,
     }
-    metadata.update(search_video_metadata)
     return metadata
 
 
@@ -294,14 +316,12 @@ def generate_dataset(
     duration: float = 3.0,
     workers: int = 1,
     seed: int = 0,
-    search_video_modes: list[str] | tuple[str, ...] = ("bidirectional",),
 ) -> None:
     """Generate the full maze dataset."""
-    search_video_modes = _normalize_search_video_modes(search_video_modes)
-
     output = Path(output_dir)
+    (output / "distance_bfs_videos").mkdir(parents=True, exist_ok=True)
+    (output / "pruning_videos").mkdir(parents=True, exist_ok=True)
     (output / "walk_videos").mkdir(parents=True, exist_ok=True)
-    _ensure_search_video_dirs(output, search_video_modes)
     (output / "solution_images").mkdir(parents=True, exist_ok=True)
 
     tasks = [
@@ -314,7 +334,6 @@ def generate_dataset(
             "fps": fps,
             "duration": duration,
             "output_dir": str(output),
-            "search_video_modes": search_video_modes,
         }
         for i in range(count)
     ]

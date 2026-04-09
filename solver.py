@@ -1,5 +1,5 @@
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -49,6 +49,7 @@ class BfsStep:
     forward_parent: dict[tuple[int, int], tuple[int, int] | None]
     backward_parent: dict[tuple[int, int], tuple[int, int] | None]
     meeting_point: tuple[int, int] | None
+    forward_dist: dict[tuple[int, int], int] = field(default_factory=dict)
 
 
 @dataclass
@@ -66,6 +67,7 @@ def solve_bfs_with_steps(
 
     visited: set[tuple[int, int]] = {start}
     parent: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
+    dist: dict[tuple[int, int], int] = {start: 0}
     frontier = deque([start])
 
     steps: list[BfsStep] = [
@@ -77,6 +79,7 @@ def solve_bfs_with_steps(
             forward_parent=dict(parent),
             backward_parent={},
             meeting_point=None,
+            forward_dist=dict(dist),
         ),
     ]
 
@@ -92,6 +95,7 @@ def solve_bfs_with_steps(
                 if 0 <= nr < h and 0 <= nc < w and grid[nr, nc] == 0 and (nr, nc) not in visited:
                     visited.add((nr, nc))
                     parent[(nr, nc)] = (r, c)
+                    dist[(nr, nc)] = dist[(r, c)] + 1
                     next_frontier.append((nr, nc))
                     if goal is None and (nr, nc) == end:
                         goal = (nr, nc)
@@ -106,6 +110,7 @@ def solve_bfs_with_steps(
             forward_parent=dict(parent),
             backward_parent={},
             meeting_point=goal,
+            forward_dist=dict(dist),
         ))
 
     path: list[tuple[int, int]] = []
@@ -209,3 +214,38 @@ def solve_bidirectional_bfs(
         path = fwd_half + bwd_half
 
     return BfsAnimationResult(steps=steps, path=path)
+
+
+def compute_pruning_order(
+    parent: dict[tuple[int, int], tuple[int, int] | None],
+    path: list[tuple[int, int]],
+) -> list[list[tuple[int, int]]]:
+    """Compute order to remove non-path branches, leaves first.
+
+    Returns a list of layers. Each layer is a batch of nodes to remove simultaneously.
+    """
+    path_set = set(path)
+
+    # Build children map
+    children: dict[tuple[int, int], set[tuple[int, int]]] = {}
+    for node in parent:
+        children.setdefault(node, set())
+    for node, par in parent.items():
+        if par is not None:
+            children.setdefault(par, set()).add(node)
+
+    to_prune = set(parent.keys()) - path_set
+    layers: list[list[tuple[int, int]]] = []
+
+    while to_prune:
+        leaves = [
+            node for node in to_prune
+            if not (children.get(node, set()) & to_prune)
+        ]
+        if not leaves:
+            layers.append(list(to_prune))
+            break
+        layers.append(leaves)
+        to_prune -= set(leaves)
+
+    return layers

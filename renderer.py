@@ -1,3 +1,5 @@
+import colorsys
+
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -360,5 +362,177 @@ def render_bfs_frames(
         for _ in range(final_frames):
             frame = _render_bfs_overlay(base, layout, last_step, final_path=path)
             frames.append(frame)
+
+    return frames
+
+
+# --- Distance-colored BFS and pruning ---
+
+def _distance_color(dist: int, max_dist: int) -> tuple[int, int, int]:
+    """Map BFS distance to a color via HSV hue rotation (blue -> red)."""
+    if max_dist <= 0:
+        return (52, 152, 219)
+    t = min(dist / max_dist, 1.0)
+    hue = 0.66 * (1.0 - t)  # 0.66 (blue) -> 0.0 (red)
+    r, g, b = colorsys.hsv_to_rgb(hue, 0.85, 0.95)
+    return (int(r * 255), int(g * 255), int(b * 255))
+
+
+def _render_distance_bfs_overlay(
+    base_img: Image.Image,
+    layout: MazeLayout,
+    step: BfsStep,
+    max_dist: int,
+) -> Image.Image:
+    """Render one frame of distance-colored BFS exploration."""
+    img = base_img.copy()
+    draw = ImageDraw.Draw(img)
+
+    line_width = max(2, int(layout.path_size * 0.4))
+    dot_radius = layout.path_size * 0.2
+
+    for node, parent in step.forward_parent.items():
+        if parent is None:
+            continue
+        dist = step.forward_dist.get(node, 0)
+        color = _distance_color(dist, max_dist)
+        x0, y0 = layout.cell_center(parent[0], parent[1])
+        x1, y1 = layout.cell_center(node[0], node[1])
+        draw.line([(x0, y0), (x1, y1)], fill=color + (200,), width=line_width)
+
+    for node in step.forward_frontier:
+        dist = step.forward_dist.get(node, 0)
+        color = _distance_color(dist, max_dist)
+        x, y = layout.cell_center(node[0], node[1])
+        draw.ellipse(
+            [x - dot_radius, y - dot_radius, x + dot_radius, y + dot_radius],
+            fill=color + (255,),
+        )
+
+    return img
+
+
+def render_distance_bfs_frames(
+    grid: np.ndarray,
+    steps: list[BfsStep],
+    start: tuple[int, int],
+    end: tuple[int, int],
+    resolution: int,
+    fps: int,
+    duration: float,
+) -> list[Image.Image]:
+    """Render BFS exploration with distance-based coloring."""
+    total_frames = int(fps * duration)
+    if total_frames < 2:
+        total_frames = 2
+
+    base, layout = render_maze_base(grid, resolution, start, end)
+    num_steps = len(steps)
+    if num_steps == 0:
+        return [base.copy()]
+
+    # Compute max distance from the final step
+    final_dist = steps[-1].forward_dist
+    max_dist = max(final_dist.values()) if final_dist else 1
+
+    # 80% exploration, 20% hold final state
+    explore_frames = int(total_frames * 0.8)
+    hold_frames = total_frames - explore_frames
+
+    frames: list[Image.Image] = []
+    for f in range(explore_frames):
+        t = f / max(1, explore_frames - 1)
+        step_idx = min(int(t * (num_steps - 1)), num_steps - 1)
+        frame = _render_distance_bfs_overlay(base, layout, steps[step_idx], max_dist)
+        frames.append(frame)
+
+    # Hold final state
+    final_frame = _render_distance_bfs_overlay(base, layout, steps[-1], max_dist)
+    for _ in range(hold_frames):
+        frames.append(final_frame)
+
+    return frames
+
+
+def render_pruning_frames(
+    grid: np.ndarray,
+    full_parent: dict[tuple[int, int], tuple[int, int] | None],
+    full_dist: dict[tuple[int, int], int],
+    pruning_layers: list[list[tuple[int, int]]],
+    path: list[tuple[int, int]],
+    start: tuple[int, int],
+    end: tuple[int, int],
+    resolution: int,
+    fps: int,
+    duration: float,
+) -> list[Image.Image]:
+    """Render pruning animation: gradually remove non-path branches."""
+    total_frames = int(fps * duration)
+    if total_frames < 2:
+        total_frames = 2
+
+    base, layout = render_maze_base(grid, resolution, start, end)
+    max_dist = max(full_dist.values()) if full_dist else 1
+
+    line_width = max(2, int(layout.path_size * 0.4))
+    path_width = max(3, int(layout.path_size * 0.45))
+
+    # Build cumulative removal sets
+    num_layers = len(pruning_layers)
+    removed_cumulative: list[set[tuple[int, int]]] = [set()]
+    removed = set()
+    for layer in pruning_layers:
+        removed = removed | set(layer)
+        removed_cumulative.append(set(removed))
+
+    # Frame allocation: 10% hold full, 80% prune, 10% hold result
+    hold_start = max(1, int(total_frames * 0.1))
+    hold_end = max(1, int(total_frames * 0.1))
+    prune_frames = total_frames - hold_start - hold_end
+
+    path_set = set(path)
+
+    def _draw_state(removed_now: set[tuple[int, int]]) -> Image.Image:
+        img = base.copy()
+        draw = ImageDraw.Draw(img)
+
+        # Draw remaining non-path edges
+        for node, par in full_parent.items():
+            if par is None or node in removed_now or node in path_set:
+                continue
+            dist = full_dist.get(node, 0)
+            color = _distance_color(dist, max_dist)
+            x0, y0 = layout.cell_center(par[0], par[1])
+            x1, y1 = layout.cell_center(node[0], node[1])
+            draw.line([(x0, y0), (x1, y1)], fill=color + (160,), width=line_width)
+
+        # Draw solution path on top (thicker, brighter)
+        for i in range(len(path) - 1):
+            dist = full_dist.get(path[i + 1], 0)
+            color = _distance_color(dist, max_dist)
+            x0, y0 = layout.cell_center(path[i][0], path[i][1])
+            x1, y1 = layout.cell_center(path[i + 1][0], path[i + 1][1])
+            draw.line([(x0, y0), (x1, y1)], fill=color + (240,), width=path_width)
+
+        return img
+
+    frames: list[Image.Image] = []
+
+    # Hold full tree
+    full_frame = _draw_state(set())
+    for _ in range(hold_start):
+        frames.append(full_frame)
+
+    # Pruning animation
+    for f in range(prune_frames):
+        t = f / max(1, prune_frames - 1)
+        stage_idx = min(int(t * num_layers), num_layers)
+        frame = _draw_state(removed_cumulative[stage_idx])
+        frames.append(frame)
+
+    # Hold final (path only)
+    final_frame = _draw_state(removed_cumulative[-1])
+    for _ in range(hold_end):
+        frames.append(final_frame)
 
     return frames

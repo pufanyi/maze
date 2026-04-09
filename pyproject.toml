@@ -9,4 +9,6 @@ dependencies = [
     "Pillow",
     "imageio[pyav]",
     "tqdm",
+    "pandas>=3.0.2",
+    "pyarrow>=23.0.1",
 ]
